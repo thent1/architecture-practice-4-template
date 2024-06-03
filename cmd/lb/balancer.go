@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"flag"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/thent1/architecture-practice-4-template/httptools"
@@ -28,6 +31,8 @@ var (
 		"server2:8080",
 		"server3:8080",
 	}
+	healthyServers = make([]bool, len(serversPool))
+	mu             sync.Mutex
 )
 
 func scheme() string {
@@ -84,24 +89,56 @@ func forward(dst string, rw http.ResponseWriter, r *http.Request) error {
 	}
 }
 
+func hash(s string) uint32 {
+	flag.Parse()
+	h := sha256.New()
+	h.Write([]byte(s))
+	return binary.BigEndian.Uint32(h.Sum(nil))
+}
+
+func chooseServer(path string) string {
+	mu.Lock()
+	defer mu.Unlock()
+
+	serverIndex := hash(path) % uint32(len(serversPool))
+
+	originalIndex := serverIndex
+	for !healthyServers[serverIndex] {
+		serverIndex = (serverIndex + 1) % uint32(len(serversPool))
+		if serverIndex == originalIndex {
+			return ""
+		}
+	}
+
+	return serversPool[serverIndex]
+}
+
 func main() {
 	flag.Parse()
 
-	// TODO: Використовуйте дані про стан сервреа, щоб підтримувати список тих серверів, яким можна відправляти ззапит.
-	for _, server := range serversPool {
+	for i, server := range serversPool {
 		server := server
+		i := i
 		go func() {
 			for range time.Tick(10 * time.Second) {
-				log.Println(server, health(server))
+				mu.Lock()
+				healthyServers[i] = health(server)
+				mu.Unlock()
 			}
 		}()
 	}
 
 	frontend := httptools.CreateServer(*port, http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
-		// TODO: Рееалізуйте свій алгоритм балансувальника.
-		forward(serversPool[0], rw, r)
-		forward(serversPool[1], rw, r)
-		forward(serversPool[2], rw, r)
+		server := chooseServer(r.URL.Path)
+		if server == "" {
+			http.Error(rw, "No healthy servers available", http.StatusServiceUnavailable)
+			return
+		}
+
+		err := forward(server, rw, r)
+		if err != nil {
+			log.Printf("Failed to forward request: %s", err)
+		}
 	}))
 
 	log.Println("Starting load balancer...")
