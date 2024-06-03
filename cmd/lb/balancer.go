@@ -100,6 +100,8 @@ func main() {
 	frontend := httptools.CreateServer(*port, http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		// TODO: Рееалізуйте свій алгоритм балансувальника.
 		forward(serversPool[0], rw, r)
+		forward(serversPool[1], rw, r)
+		forward(serversPool[2], rw, r)
 	}))
 
 	log.Println("Starting load balancer...")
