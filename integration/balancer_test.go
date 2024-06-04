@@ -15,18 +15,67 @@ var client = http.Client{
 }
 
 func TestBalancer(t *testing.T) {
-	if _, exists := os.LookupEnv("INTEGRATION_TEST"); !exists {
+	if !isIntegrationTestEnabled() {
 		t.Skip("Integration test is not enabled")
 	}
 
-	// TODO: Реалізуйте інтеграційний тест для балансувальникка.
-	resp, err := client.Get(fmt.Sprintf("%s/api/v1/some-data", baseAddress))
-	if err != nil {
-		t.Error(err)
+	addresses := []string{
+		getURL("/api/v1/some-data"),
+		getURL("/api/v1/some-data2"),
+		getURL("/api/v1/some-data"),
 	}
-	t.Logf("response from [%s]", resp.Header.Get("lb-from"))
+
+	servers := sendRequests(t, addresses)
+
+	if servers[0] != servers[2] {
+		t.Errorf("Different servers for the same address: got %s and %s", servers[0], servers[2])
+	}
 }
 
 func BenchmarkBalancer(b *testing.B) {
-	// TODO: Реалізуйте інтеграційний бенчмарк для балансувальникка.
+	if !isIntegrationTestEnabled() {
+		b.Skip("Integration test is not enabled")
+	}
+
+	for i := 0; i < b.N; i++ {
+		resp, err := client.Get(getURL("/api/v1/some-data"))
+		if err != nil {
+			b.Error(err)
+		}
+		defer resp.Body.Close()
+	}
+}
+
+func isIntegrationTestEnabled() bool {
+	_, exists := os.LookupEnv("INTEGRATION_TEST")
+	return exists
+}
+
+func getURL(path string) string {
+	return fmt.Sprintf("%s%s", baseAddress, path)
+}
+
+func sendRequests(t *testing.T, addresses []string) []string {
+	numRequests := len(addresses)
+	servers := make([]string, numRequests)
+
+	for i := 0; i < numRequests; i++ {
+		resp, err := client.Get(addresses[i])
+		if err != nil {
+			t.Error(err)
+			continue
+		}
+		if resp != nil {
+			defer resp.Body.Close()
+			server := resp.Header.Get("lb-from")
+			if server == "" {
+				t.Errorf("Missing 'lb-from' header in response for request %d", i)
+			}
+			servers[i] = server
+		} else {
+			t.Errorf("Response is nil for request %d", i)
+		}
+	}
+
+	return servers
 }
